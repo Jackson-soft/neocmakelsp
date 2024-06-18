@@ -8,7 +8,7 @@ use once_cell::sync::Lazy;
 static NUMBERREGEX: Lazy<regex::Regex> =
     Lazy::new(|| regex::Regex::new(r"^\d+(?:\.+\d*)?").unwrap());
 
-const BOOL_VAL: &[&str] = &["ON", "OFF", "TRUE", "OFF"];
+const BOOL_VAL: &[&str] = &["ON", "OFF", "TRUE", "FALSE"];
 const UNIQUE_KEYWORD: &[&str] = &["AND", "NOT"];
 
 pub const LEGEND_TYPE: &[SemanticTokenType] = &[
@@ -160,6 +160,7 @@ fn sub_tokens(
             }
             "argument_list" => {
                 let mut argument_course = child.walk();
+                let mut is_first_val = !is_if; // NOTE: if is if, not check it
                 for argument in child.children(&mut argument_course) {
                     let h = argument.start_position().row;
                     let x = argument.start_position().column;
@@ -177,21 +178,69 @@ fn sub_tokens(
                         });
                         *preline = h as u32;
                         *prestart = x as u32;
+                        is_first_val = false;
                         continue;
                     }
                     if argument
                         .child(0)
                         .is_some_and(|child| child.kind() == "quoted_argument")
                     {
-                        res.push(SemanticToken {
-                            delta_line: h as u32 - *preline,
-                            delta_start: x as u32 - *prestart,
-                            length: (y - x) as u32,
-                            token_type: get_token_position(SemanticTokenType::STRING),
-                            token_modifiers_bitset: 0,
-                        });
-                        *prestart = x as u32;
-                        *preline = h as u32;
+                        let quoted_argument = argument.child(0).unwrap();
+                        if quoted_argument.child_count() == 1 {
+                            res.push(SemanticToken {
+                                delta_line: h as u32 - *preline,
+                                delta_start: x as u32 - *prestart,
+                                length: (y - x) as u32,
+                                token_type: get_token_position(SemanticTokenType::STRING),
+                                token_modifiers_bitset: 0,
+                            });
+                            *prestart = x as u32;
+                            *preline = h as u32;
+                        } else {
+                            // TODO: very base implment, but it is enough for me,
+                            // if you do not very satisfied with this
+                            // implment, I am gald to accept your pr, thanks
+                            // NOTE: highlight variable in string
+                            let mut quoted_argument_course = quoted_argument.walk();
+                            for element in quoted_argument.children(&mut quoted_argument_course) {
+                                let h = element.start_position().row;
+                                let x = element.start_position().column;
+                                let y = element.end_position().column;
+                                if element.kind() == "quoted_element" {
+                                    let mut quoted_element_walk = element.walk();
+                                    for variable in element.children(&mut quoted_element_walk) {
+                                        if variable.kind() != "variable_ref" {
+                                            continue;
+                                        }
+                                        let h = variable.start_position().row;
+                                        let x = variable.start_position().column;
+                                        let y = variable.end_position().column;
+                                        res.push(SemanticToken {
+                                            delta_line: h as u32 - *preline,
+                                            delta_start: x as u32 - *prestart,
+                                            length: (y - x) as u32,
+                                            token_type: get_token_position(
+                                                SemanticTokenType::VARIABLE,
+                                            ),
+                                            token_modifiers_bitset: 0,
+                                        });
+                                        *prestart = x as u32;
+                                        *preline = h as u32;
+                                    }
+                                } else {
+                                    res.push(SemanticToken {
+                                        delta_line: h as u32 - *preline,
+                                        delta_start: x as u32 - *prestart,
+                                        length: (y - x) as u32,
+                                        token_type: get_token_position(SemanticTokenType::STRING),
+                                        token_modifiers_bitset: 0,
+                                    });
+                                    *prestart = x as u32;
+                                    *preline = h as u32;
+                                }
+                            }
+                        }
+                        is_first_val = false;
                         continue;
                     }
                     if argument
@@ -205,6 +254,8 @@ fn sub_tokens(
                             prestart,
                             false,
                         ));
+                        is_first_val = false;
+                        continue;
                     }
                     let name = &newsource[h][x..y];
                     if BOOL_VAL.contains(&name) {
@@ -217,9 +268,10 @@ fn sub_tokens(
                         });
                         *prestart = x as u32;
                         *preline = h as u32;
+                        is_first_val = false;
                         continue;
                     }
-                    if NUMBERREGEX.is_match(&name) {
+                    if NUMBERREGEX.is_match(name) {
                         res.push(SemanticToken {
                             delta_line: h as u32 - *preline,
                             delta_start: x as u32 - *prestart,
@@ -241,6 +293,7 @@ fn sub_tokens(
                         });
                         *prestart = x as u32;
                         *preline = h as u32;
+                        is_first_val = false;
                         continue;
                     }
                     if name.chars().all(|a| !a.is_lowercase()) && !is_if {
@@ -253,7 +306,21 @@ fn sub_tokens(
                         });
                         *prestart = x as u32;
                         *preline = h as u32;
+                        is_first_val = false;
+                        continue;
                     }
+                    if is_first_val {
+                        res.push(SemanticToken {
+                            delta_line: h as u32 - *preline,
+                            delta_start: x as u32 - *prestart,
+                            length: (y - x) as u32,
+                            token_type: get_token_position(SemanticTokenType::VARIABLE),
+                            token_modifiers_bitset: 0,
+                        });
+                        *prestart = x as u32;
+                        *preline = h as u32;
+                    }
+                    is_first_val = false;
                 }
             }
             "function" | "macro" | "if" | "foreach" | "elseif" => {

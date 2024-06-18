@@ -72,8 +72,12 @@ pub fn checkerror(local_path: &Path, source: &str, input: tree_sitter::Node) -> 
                     }
                 }
                 if name == "include" && node.child_count() >= 4 {
-                    let ids = node.child(2).unwrap();
-                    let first_arg_node = ids.child(0).unwrap();
+                    let Some(ids) = node.child(2) else {
+                        continue;
+                    };
+                    let Some(first_arg_node) = ids.child(0) else {
+                        continue;
+                    };
                     if ids.start_position().row == ids.end_position().row {
                         let h = ids.start_position().row;
                         let x = first_arg_node.start_position().column;
@@ -177,4 +181,14 @@ fn scanner_include_error(path: &PathBuf) -> bool {
         }
         Err(_) => true,
     }
+}
+
+#[test]
+fn gammer_passed_check() {
+    let source = include_str!("../assert/gammer/include_check.cmake");
+    let mut parse = tree_sitter::Parser::new();
+    parse.set_language(&tree_sitter_cmake::language()).unwrap();
+    let thetree = parse.parse(&source, None).unwrap();
+
+    checkerror(std::path::Path::new("."), source, thetree.root_node());
 }
